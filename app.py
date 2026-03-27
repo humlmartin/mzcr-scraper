@@ -314,13 +314,13 @@ def load_data(url: str, f_rok: str, f_ico: str, f_kod: str, f_odb: str) -> pd.Da
         df = df[df[odb_col].str.strip() == f_odb.strip()]
 
     # ── OBOHACENÍ ─────────────────────────────────────────────────────────────
-    if "kod" in df.columns:
-        # kódy mohou mít přidané nuly (00901 → 901) — zkusíme obě varianty
-        def lookup_vykon(k):
+    # kód výkonu — může se jmenovat různě
+    _kod_col = next((c for c in ["kod","vykon_kod","VYKON_KOD","kod_vykonu"] if c in df.columns), None)
+    if _kod_col:
+        def _lv(k):
             k = str(k).strip()
-            return VYKONY.get(k) or VYKONY.get(k.lstrip("0")) or VYKONY.get(k.lstrip("0").zfill(5)) or ""
-        df.insert(df.columns.get_loc("kod")+1, "vykon_nazev",
-                  df["kod"].apply(lookup_vykon))
+            return VYKONY.get(k) or VYKONY.get(k.lstrip("0") or "0") or ""
+        df.insert(df.columns.get_loc(_kod_col)+1, "vykon_nazev", df[_kod_col].apply(_lv))
 
     if odb_col:
         df.insert(df.columns.get_loc(odb_col)+1, f"{odb_col}_nazev",
@@ -353,6 +353,14 @@ def fmt(n):
     if pd.isna(n): return "—"
     return f"{int(n):,}".replace(",", " ")
 
+def get_kod_col(df):
+    """Najde sloupec s kódem výkonu — různé soubory ho pojmenovávají různě."""
+    return next((c for c in ["kod","vykon_kod","VYKON_KOD","kod_vykonu","KOD_VYKONU"] if c in df.columns), None)
+
+def lookup_vykon(k):
+    k = str(k).strip()
+    return VYKONY.get(k) or VYKONY.get(k.lstrip("0") or "0") or ""
+
 def get_num_col(df):
     return next((c for c in ["suma_mnozstvi","pocet_kontaktu","pocet_pacientu","suma_uhrad","uhrada_ZP","pocet_baleni"] if c in df.columns), None)
 
@@ -361,6 +369,9 @@ def get_id_col(df):
 
 def get_odb_col(df):
     return next((c for c in ["odbornost","odbornost_predepisujici"] if c in df.columns), None)
+
+# Limit pro zobrazení v tabulce — víc řádků způsobí MessageSizeError
+DISPLAY_LIMIT = 5_000
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # UI
@@ -412,6 +423,7 @@ with st.sidebar:
     load_btn = st.button("▶ Načíst data", type="primary", use_container_width=True)
 
     st.divider()
+    st.caption("Vytvořil **Martin Huml** · HS Flamingo s.r.o.\n\nData: [ÚZIS ČR](https://www.uzis.cz) · [data.mzcr.cz](https://data.mzcr.cz)")
     with st.expander("Vlastní URL"):
         custom_url = st.text_input("URL souboru CSV", placeholder="https://data.mzcr.cz/…")
         if custom_url:
@@ -448,12 +460,13 @@ else:
 nc     = get_num_col(df)
 id_col = get_id_col(df)
 odb_col= get_odb_col(df)
+kod_col= get_kod_col(df)
 
 # Metriky
 m = st.columns(5)
 m[0].metric("Řádků",        fmt(len(df)))
 m[1].metric("IČO/IČZ",      fmt(df[id_col].nunique()) if id_col else "—")
-m[2].metric("Kódů výkonů",  fmt(df["kod"].nunique()) if "kod" in df.columns else "—")
+m[2].metric("Kódů výkonů",  fmt(df[kod_col].nunique()) if kod_col else "—")
 m[3].metric("Odborností",   fmt(df[odb_col].nunique()) if odb_col else "—")
 m[4].metric(f"Σ {nc or '?'}", fmt(df[nc].sum()) if nc else "—")
 
@@ -471,12 +484,12 @@ t_data, t_ico, t_kod, t_odb, t_graf, t_exp = st.tabs([
 with t_data:
     with st.expander("🔍 Filtrovat v načtených datech"):
         c = st.columns(6)
-        pf_rok = c[0].text_input("Rok",       key="pf_rok", placeholder="vše")
-        pf_ico = c[1].text_input("IČO/IČZ",   key="pf_ico", placeholder="vše")
-        pf_kod = c[2].text_input("Kód výkonu",key="pf_kod", placeholder="vše")
-        pf_odb = c[3].text_input("Odbornost", key="pf_odb", placeholder="vše")
-        pf_min = c[4].number_input("Min",     key="pf_min", value=None, placeholder="vše", min_value=0)
-        pf_max = c[5].number_input("Max",     key="pf_max", value=None, placeholder="vše", min_value=0)
+        pf_rok = c[0].text_input("Rok",        key="pf_rok", placeholder="vše")
+        pf_ico = c[1].text_input("IČO/IČZ",    key="pf_ico", placeholder="vše")
+        pf_kod = c[2].text_input("Kód výkonu", key="pf_kod", placeholder="vše")
+        pf_odb = c[3].text_input("Odbornost",  key="pf_odb", placeholder="vše")
+        pf_min = c[4].number_input("Min", key="pf_min", value=None, placeholder="vše", min_value=0)
+        pf_max = c[5].number_input("Max", key="pf_max", value=None, placeholder="vše", min_value=0)
 
     dff = df.copy()
     if pf_rok and "rok" in dff.columns:
@@ -484,8 +497,8 @@ with t_data:
     if pf_ico and id_col:
         vals = {v.strip() for v in pf_ico.replace(";",",").split(",") if v.strip()}
         dff = dff[dff[id_col].isin(vals)]
-    if pf_kod and "kod" in dff.columns:
-        dff = dff[dff["kod"] == pf_kod]
+    if pf_kod and kod_col:
+        dff = dff[dff[kod_col] == pf_kod]
     if pf_odb and odb_col:
         dff = dff[dff[odb_col] == pf_odb]
     if pf_min is not None and nc:
@@ -493,19 +506,33 @@ with t_data:
     if pf_max is not None and nc:
         dff = dff[dff[nc] <= pf_max]
 
-    st.caption(f"Zobrazeno **{fmt(len(dff))}** řádků")
-    st.dataframe(dff, use_container_width=True, height=520)
+    total_rows = len(dff)
+    c1, c2 = st.columns([3,1])
+    c1.caption(f"Celkem **{fmt(total_rows)}** řádků")
+
+    # Stránkování — max DISPLAY_LIMIT řádků najednou
+    if total_rows > DISPLAY_LIMIT:
+        page = c2.number_input(
+            f"Stránka (po {DISPLAY_LIMIT:,})", min_value=1,
+            max_value=(total_rows // DISPLAY_LIMIT) + 1, value=1, step=1
+        )
+        start = (page - 1) * DISPLAY_LIMIT
+        dff_show = dff.iloc[start : start + DISPLAY_LIMIT]
+        st.info(f"⚠ Zobrazeno {fmt(len(dff_show))} z {fmt(total_rows)} řádků (stránka {page}). Použij filtry výše pro zúžení výsledků.")
+    else:
+        dff_show = dff
+
+    st.dataframe(dff_show, use_container_width=True, height=520)
 
 # ────────────────────────────────────────────────────────────────────────────
 # TAB: SOUHRN IČO
 # ────────────────────────────────────────────────────────────────────────────
 with t_ico:
     if id_col:
-        agg = {id_col: "first"}
-        agg["Počet řádků"] = (id_col, "count")
-        if nc:           agg[f"Σ {nc}"]     = (nc,    "sum")
-        if "kod" in df.columns: agg["Unik. kódů"] = ("kod", "nunique")
-        grp = df.groupby(id_col).agg(**{k:v for k,v in agg.items() if k!=id_col}).reset_index()
+        agg = {"Počet řádků": (id_col, "count")}
+        if nc:      agg[f"Σ {nc}"]    = (nc, "sum")
+        if kod_col: agg["Unik. kódů"] = (kod_col, "nunique")
+        grp = df.groupby(id_col).agg(**agg).reset_index()
         if nc: grp = grp.sort_values(f"Σ {nc}", ascending=False)
         st.dataframe(grp, use_container_width=True, height=600)
     else:
@@ -515,19 +542,16 @@ with t_ico:
 # TAB: SOUHRN KÓD
 # ────────────────────────────────────────────────────────────────────────────
 with t_kod:
-    if "kod" in df.columns:
-        agg_k = {"Počet řádků": ("kod","count")}
-        if nc:      agg_k[f"Σ {nc}"]  = (nc,"sum")
+    if kod_col:
+        agg_k = {"Počet řádků": (kod_col,"count")}
+        if nc:      agg_k[f"Σ {nc}"]   = (nc,"sum")
         if id_col:  agg_k["Unik. IČO"] = (id_col,"nunique")
-        grp_k = df.groupby("kod").agg(**agg_k).reset_index()
-        def lv(k):
-            k = str(k).strip()
-            return VYKONY.get(k) or VYKONY.get(k.lstrip("0")) or "—"
-        grp_k.insert(1, "Název výkonu", grp_k["kod"].apply(lv))
+        grp_k = df.groupby(kod_col).agg(**agg_k).reset_index()
+        grp_k.insert(1, "Název výkonu", grp_k[kod_col].apply(lookup_vykon))
         if nc: grp_k = grp_k.sort_values(f"Σ {nc}", ascending=False)
         st.dataframe(grp_k, use_container_width=True, height=600)
     else:
-        st.info("Soubor neobsahuje sloupec 'kod'.")
+        st.info("Soubor neobsahuje sloupec s kódem výkonu.")
 
 # ────────────────────────────────────────────────────────────────────────────
 # TAB: SOUHRN ODBORNOST
@@ -554,11 +578,11 @@ with t_graf:
         col_a, col_b = st.columns(2)
 
         with col_a:
-            if "kod" in df.columns:
+            if kod_col:
                 st.subheader("Top 20 kódů výkonů")
-                top = df.groupby("kod")[nc].sum().nlargest(20).reset_index()
-                top["Název"] = top["kod"].apply(lambda k: VYKONY.get(k) or VYKONY.get(k.lstrip("0")) or k)
-                top["Popisek"] = top["Název"] + "  (" + top["kod"] + ")"
+                top = df.groupby(kod_col)[nc].sum().nlargest(20).reset_index()
+                top["Název"] = top[kod_col].apply(lookup_vykon)
+                top["Popisek"] = top["Název"].where(top["Název"] != "", top[kod_col]) + "  (" + top[kod_col] + ")"
                 fig = px.bar(top, x=nc, y="Popisek", orientation="h",
                              color_discrete_sequence=["#1a1916"], height=520)
                 fig.update_layout(yaxis=dict(autorange="reversed"), margin=dict(l=0,r=0,t=10,b=0))
