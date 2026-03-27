@@ -37,17 +37,43 @@ ODBORNOSTI = {
     "305":"Radiologie","321":"Rehabilitace","401":"Klinická biochemie",
     "404":"Mikrobiologie","405":"Patologie","501":"Záchranná služba","600":"Lékárna",
 }
-VYKONY = {
+_VYKONY_BASE = {
     "901":"Návštěva registrujícího lékaře","902":"Preventivní prohlídka",
     "903":"Cílené vyšetření","904":"Konziliární vyšetření","905":"Telefonická konzultace",
-    "906":"Pohotovostní péče","907":"Pohotovostní návštěva","909":"Dispenzarizace",
-    "910":"EKG","911":"EKG Holter","912":"Spirometrie","913":"UZ vyšetření",
+    "906":"Pohotovostní péče","907":"Pohotovostní návštěva","908":"Návštěva — doprovod",
+    "909":"Dispenzarizace","910":"EKG","911":"EKG Holter","912":"Spirometrie",
+    "913":"UZ vyšetření","914":"Preventivní prohlídka rozšířená",
     "916":"Odběr krve","917":"Aplikace infúze","918":"Injekce i.m./s.c.",
-    "921":"Biochemie","922":"Krevní obraz","925":"Moč — chemie + sediment",
-    "930":"RTG","931":"CT","932":"MRI","933":"Endoskopie","950":"Vakcinace",
-    "9543":"Krevní obraz KO+diff","9511":"Biochemické vyšetření",
+    "919":"Injekce i.v.","921":"Biochemie","922":"Krevní obraz",
+    "923":"Koagulace (INR)","924":"Sérologické vyšetření",
+    "925":"Moč — chemie + sediment","926":"Stěr","927":"Kultivace",
+    "928":"Glykémie kapilární","929":"PSA","930":"RTG","931":"CT","932":"MRI",
+    "933":"Endoskopie","934":"Kolposkopie","935":"Tonometrie","936":"Audiometrie",
+    "937":"Alergologické testy","938":"Fyzikální terapie","939":"Rehabilitace",
+    "940":"Edukace pacienta","941":"Ošetření rány","943":"Incize","944":"Excize",
+    "945":"Sutura","946":"Sádrování","948":"Injekce do kloubu","950":"Vakcinace",
+    "951":"Desenzibilizace","952":"Cévkování","956":"Kyslíková terapie",
+    # 5místné kódy
     "09511":"Biochemické vyšetření","09543":"Krevní obraz KO+diff",
+    "09119":"EKG","09123":"Spirometrie","09133":"EKG Holter",
+    "09216":"Echokardiografie","11503":"RTG hrudníku",
+    "11521":"CT vyšetření","11527":"MRI vyšetření",
+    "11550":"Sonografie břicha","11551":"Sonografie malé pánve",
+    "13022":"Gastroskopie","13023":"Kolonoskopie",
+    "01011":"Vyšetření prakt. lékařem","01013":"Preventivní prohlídka",
+    "01021":"Návštěva u pacienta","01111":"Dispenzární prohlídka",
+    "22001":"Gynekologické vyšetření","22011":"Cytologický stěr",
+    "23001":"Dětské vyšetření","26001":"Neurologické vyšetření",
+    "27001":"Oftalmologické vyšetření","28001":"ORL vyšetření",
+    "29001":"Stomatologické vyšetření","29011":"Extrakce zubu",
+    "31001":"Interní vyšetření","85011":"Vakcinace",
 }
+# Automaticky přidej varianty s nulami: 901 → 00901, 00901 → 901
+VYKONY = dict(_VYKONY_BASE)
+for _k, _v in list(_VYKONY_BASE.items()):
+    VYKONY[_k.zfill(5)] = _v        # 901 → 00901
+    _stripped = _k.lstrip("0") or "0"
+    VYKONY[_stripped] = _v           # 00901 → 901
 POHLAVI = {"1":"Muž","2":"Žena","M":"Muž","F":"Žena","Z":"Žena"}
 VEKOVE_SKUPINY = {
     "66000004":"0–4 let","66005009":"5–9 let","66010014":"10–14 let",
@@ -184,8 +210,12 @@ def load_data(url: str, f_rok: str, f_ico: str, f_kod: str, f_odb: str) -> pd.Da
 
     # ── OBOHACENÍ ─────────────────────────────────────────────────────────────
     if "kod" in df.columns:
+        # kódy mohou mít přidané nuly (00901 → 901) — zkusíme obě varianty
+        def lookup_vykon(k):
+            k = str(k).strip()
+            return VYKONY.get(k) or VYKONY.get(k.lstrip("0")) or VYKONY.get(k.lstrip("0").zfill(5)) or ""
         df.insert(df.columns.get_loc("kod")+1, "vykon_nazev",
-                  df["kod"].map(VYKONY).fillna(""))
+                  df["kod"].apply(lookup_vykon))
 
     if odb_col:
         df.insert(df.columns.get_loc(odb_col)+1, f"{odb_col}_nazev",
@@ -385,7 +415,10 @@ with t_kod:
         if nc:      agg_k[f"Σ {nc}"]  = (nc,"sum")
         if id_col:  agg_k["Unik. IČO"] = (id_col,"nunique")
         grp_k = df.groupby("kod").agg(**agg_k).reset_index()
-        grp_k.insert(1, "Název výkonu", grp_k["kod"].map(VYKONY).fillna("—"))
+        def lv(k):
+            k = str(k).strip()
+            return VYKONY.get(k) or VYKONY.get(k.lstrip("0")) or "—"
+        grp_k.insert(1, "Název výkonu", grp_k["kod"].apply(lv))
         if nc: grp_k = grp_k.sort_values(f"Σ {nc}", ascending=False)
         st.dataframe(grp_k, use_container_width=True, height=600)
     else:
@@ -419,7 +452,7 @@ with t_graf:
             if "kod" in df.columns:
                 st.subheader("Top 20 kódů výkonů")
                 top = df.groupby("kod")[nc].sum().nlargest(20).reset_index()
-                top["Název"] = top["kod"].map(VYKONY).fillna(top["kod"])
+                top["Název"] = top["kod"].apply(lambda k: VYKONY.get(k) or VYKONY.get(k.lstrip("0")) or k)
                 top["Popisek"] = top["Název"] + "  (" + top["kod"] + ")"
                 fig = px.bar(top, x=nc, y="Popisek", orientation="h",
                              color_discrete_sequence=["#1a1916"], height=520)
